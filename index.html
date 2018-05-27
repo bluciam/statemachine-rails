@@ -1,0 +1,467 @@
+<html>
+	<head>
+    <meta charset="utf-8">
+    <meta name="description" content="State machine in Rails">
+    <meta name="author" content="Blanca Mancilla">
+
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, minimal-ui">
+
+		<link rel="stylesheet" href="reveal.js/css/reveal.css">
+		<link rel="stylesheet" href="reveal.js/css/theme/white.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+    <!-- Code syntax highlighting -->
+    <link rel="stylesheet" href="lib/css/zenburn.css">
+	</head>
+	<body>
+		<div data-transition="fade" class="reveal">
+			<div class="slides">
+				<section>
+          <h2>Blanca Mancilla</h2>
+          <h3>Implementing A State Machine<br> In Rails</h3>
+          <p>
+          <p>
+            Montreal.rb Meetup, 
+            AdGear, Montreal
+            <br>
+            Tuesday, 15 May 2018
+          </p>
+        </section>
+        <section>
+          <h3>School Accreditation Portal</h3>
+          <ul>
+            <li>What is it?</li>
+            <div class='fragment'>
+            <li>
+              Important models and associations
+              <img src="school_survey_model.png">
+            </li>
+            <li>
+              A survey has <b>forms</b> to be prepared by different parties.
+            </li>
+            <li>
+              Six types of users, each potentially with distinct access to
+              forms.
+            </li>
+            </div>
+          </ul>
+        </section>
+				<section>
+          <h2>Issue #1</h2>
+          Self-Study coodinator should have access to<br>
+          Progress Report and Future Planning Document.
+          <!-- #1132 -->
+        </section>
+				<section>
+          <h2>Issue #2</h2>
+          We need to include new form-types for special circumstances.
+          <small>
+            Refactor viewable? and editable? in form model to add new
+            form_types.
+            <!-- #1196 -->
+          </small>
+        </section>
+				<section>
+          <h2>Issue #3</h2>
+          Include these forms: PRs, IRs, SRs, and FPDs, into the school survey
+          flow.
+          <!-- #1261 -->
+        </section>
+				<section>
+          <h2>Issue #4</h2>
+          Change the View for Schools Receiving
+          <br>1 & 2 for membership status
+          <!-- #1152 -->
+          <br>
+          <br>
+          <small align='left'>
+          </small>
+          For schools that receive statuses of 1- or 2-years, they will need a
+          different timeline for submitting reports. Possible statuses:
+          <br><code>%w(7 7R 7Rad 6 6R 2 1)</code>
+        </section>
+
+				<section>
+          <pre>app/models/form.rb</pre><br>
+          <small>
+          <pre><code>def viewable?(current_user, school_survey)
+  case form_type
+  when 'Self-Study'
+    current_user.from_school? || school_survey.vcr_in_progress?
+  when 'Visiting Committee'
+    if current_user.head_of_school?
+      school_survey.vcr_submitted? ||
+        school_survey.fpd_completed? ||
+        school_survey.progress_report_completed?                                                 
+    elsif current_user.from_vcr?
+      school_survey.vcr_completed? ||
+        school_survey.vcr_submitted? ||
+        school_survey.vcr_in_progress? ||
+        school_survey.fpd_completed? ||
+        school_survey.progress_report_completed?
+    end
+  when 'Future Planning Document'
+    current_user.school_admin? && (
+      school_survey.progress_report_completed? ||
+      school_survey.fpd_completed?
+    )
+  when say('progress_report')
+    current_user.school_admin? && (
+      school_survey.progress_report_completed? ||
+      school_survey.fpd_completed?
+    )
+  else
+    false
+  end
+end
+          </code></pre>
+          </small>
+        </section>
+
+				<section>
+          <pre>app/models/form.rb</pre><br>
+          <small>
+          <pre><code>def editable?(current_user, school_survey)
+  case form_type
+  when 'Self-Study'
+    current_user.from_school? && school_survey.study_in_progress?
+  when 'Visiting Committee'
+    current_user.from_vcr? && school_survey.vcr_in_progress?
+  when 'Future Planning Document'
+    current_user.school_admin? && school_survey.vcr_submitted?
+  when 'Status-Defining'
+    current_user.school_admin?
+  when 'Interim'
+    current_user.from_vcr?
+  when 'Supplementary Report'
+    current_user.head_of_school? && school_survey.vcr_submitted?
+  when say('progress_report')
+    current_user.school_admin? && school_survey.fpd_completed?
+  else
+    false
+  end
+end
+          </small>
+          </code></pre>
+        </section>
+
+				<section>
+          <pre>app/views/forms/show.html.erb</pre><br>
+          <small>
+          <pre><code>
+&lt;div class=&quot;row&quot;&gt;
+  &lt;div class=&quot;col-md-12 text-right&quot;&gt;
+    &lt;%= simple_form_for @school_survey, url: school_survey_path(@school_survey, form_id: @form.id), html: { class: &quot;form-inline&quot; } do |f| %&gt;
+      &lt;input type=&quot;checkbox&quot; name=&quot;toggle-collapse&quot;  data-handle-width=&quot;100&quot;&gt;
+      &lt;% if @school_survey.vcr_submitted? &amp; current_user.school_admin? &amp;&amp; @form.fpd? %&gt;
+        &lt;%= f.hidden_field :status, value: &quot;FPD Completed&quot; %&gt;
+        &lt;%= f.button :submit, &quot;Submit&quot;, class: &quot;btn btn-success&quot;, data: { confirm: &quot;Are you sure you wish to submit your Future Planning Document? This action cannot be undone.&quot; } %&gt;
+      &lt;% end %&gt;
+      &lt;% if @school_survey.study_in_progress? &amp;&amp; current_user.school_admin? &amp;&amp; @school_survey.approved_percent_complete(@form) &gt;= 100.0 %&gt;
+        &lt;%= f.hidden_field :status, value: &quot;Self-Study Completed, VCR in Progress&quot; %&gt;
+        &lt;%= f.button :submit, &quot;Submit&quot;, class: &quot;btn btn-success&quot;, data: { confirm: &quot;Are you sure you wish to submit your Self-Study? This action cannot be undone.&quot; } %&gt;
+      &lt;% end %&gt;
+    &lt;% end %&gt;
+    &lt;em class=&quot;text-muted&quot;&gt;
+    &lt;% if current_user.from_school? %&gt;
+      Comments are only visible for your school.&lt;br&gt;
+      The Visiting Team and &lt;%= say 'org_acronym' %&gt; administrators cannot view them.
+    &lt;% end %&gt;
+    &lt;/em&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+          </small>
+          </code></pre>
+        </section>
+
+				<section>
+          Snippets of <code>app/views/forms/show.html.erb</code><br>
+          <pre>
+&lt;% if @school_survey.study_in_progress? &amp;&amp;
+  current_user.school_admin? &amp;&amp;
+  @school_survey.approved_percent_complete(@form) &gt;= 100.0 %&gt;
+          </pre>
+          <pre>
+&lt;% if @school_survey.vcr_submitted? &
+  current_user.school_admin? &&
+  @form.fpd? %&gt;
+          </pre>
+        </section>
+
+				<section>
+          <img src="Stages_of_school_survey.png">
+        </section>
+
+				<section>
+          <h1>Refactor</h1>
+        </section>
+
+				<section>
+          <h3>State Machine</h3>
+          <blockquote>
+          A state is a description of the status of a system that is waiting to
+          execute a transition. A transition is a set of actions to be executed
+          when a condition is fulfilled or when an event is received.
+          </blockquote>
+          <p>
+          <p align=right>
+          <small>
+          <a target="_blank"
+             href=https://en.wikipedia.org/wiki/Finite-state_machine>
+            https://en.wikipedia.org/wiki/Finite-state_machine
+          </a>
+          </small>
+        </section>
+
+				<section>
+          <h3>State Machine</h3>
+          <blockquote>
+          In software terms when the state machines become important is when some internal
+          state matters for the behavior of an object. In essence there are
+          three core concepts for FSM, States (duh), Transitions and Events.
+          </blockquote>
+          <p>
+          <p align=right>
+          <small>
+          <a target="_blank" href=https://www.sitepoint.com/state-machines-in-ruby/>
+            https://www.sitepoint.com/state-machines-in-ruby/
+          </a>
+          </small>
+        </section>
+
+				<section>
+          <h3>The Ruby Tollbox:</h3>
+          <h4>CATEGORY: State Machines</h4>
+          <a target="_blank"
+             href=https://www.ruby-toolbox.com/categories/state_machines.html>
+            https://www.ruby-toolbox.com/categories/state_machines.html
+          </a>
+        </section>
+
+				<section>
+          <h3>The Gem</h3>
+          <a target="_blank"
+             href=https://github.com/state-machines/state_machines>
+             https://github.com/state-machines/state_machines
+          </a>
+        </section>
+
+				<section>
+          <h3>First version</h3>
+          <pre><code>
+  state_machine :state, initial: :ssp do
+    event :submit_ssr do
+      transition :ssp => :ssc_vcrp
+    end
+
+    event :submit_vcr do
+      transition :ssc_vcrp => :ssc_vcrc
+    end
+
+    event :submit_vcr_hos do
+      transition :ssc_vcrc => :vcr_hos                                          
+    end
+
+    event :submit_fpd do
+      transition :vcr_hos => :fpdc
+    end
+  end
+          </code></pre>
+        </section>
+
+				<section>
+          <h3>First version</h3>
+          <pre><code>
+    # Saving the status in the database
+    after_transition :ssp => :ssc_vcrp do |ss|
+      ss.update(status: 'Self-Study Completed, VCR in Progress')
+    end
+
+    after_transition :ssc_vcrp => :ssc_vcrc do |ss|
+      ss.update(status: 'Self-Study & VCR Completed')
+    end
+
+    after_transition :ssc_vcrc => :vcr_hos do |ss|
+      ss.update(status: 'VCR Submitted to Head of School')
+    end
+
+    after_transition :vcr_hos => :fpdc do |ss|
+      ss.update(status: 'FPD Completed')
+    end
+          </code></pre>
+        </section>
+
+        <section>
+          <h3>So far</h3>
+          <ul align='left'>
+          <li>No new behavior, pure refactoring.</li>
+          <li>Centralizing the logic in one place, taking away from the
+            views.</li>
+          <li>Migration from status to state as desicion point, thus
+            eliminating 'magic strings'.</li>
+          <li>Testing and deploying to catch bug before moving on.</li>
+          </ul>
+        </section>
+
+				<section>
+          <img src="Stages_of_school_survey.png">
+        </section>
+
+				<section>
+          <h3>Second version</h3>
+          <pre><code>event :submit_fpd do
+  # set fpd_done
+  transition :vcr_hos => :fpdc,
+    if: ->(ss) { ss.includes_pr? }
+      # if 2_7rad, set fpd_done
+  transition :src => :fpdc,
+    if: ->(ss) { ss.school_2_7rad? &&
+      ss.includes_pr? &&
+      ss.includes_sr? }
+end
+
+event :submit_sr do
+  # set src_done
+  transition :vcr_hos => :src,
+    if: ->(ss) { ss.school_2_7rad? }
+  transition :fpdc => :src,
+    if: ->(ss) { ss.school_2_7rad? }
+end
+          </code></pre>
+        </section>
+
+				<section>
+          <h3>Second version</h3>
+          <pre><code>event :submit_pr do
+  transition :fpdc => :prc,
+    if: ->(ss) { ss.school_default_term? }
+  transition :src => :prc,
+    if: ->(ss) { ss.school_2_7rad? &&
+                 ss.includes_ir? &&
+                 ss.includes_sd? }
+                 # && fpd_done && src_done
+  transition :fpdc => :prc,
+    if: ->(ss) { ss.school_2_7rad? &&
+                 ss.includes_ir? &&
+                 ss.includes_sd? } 
+                 # && fpd_done && src_done
+end
+
+event :submit_ir do
+  transition :prc => :irc,
+    if: ->(ss) { ss.school_long_term? }
+end
+          </code></pre>
+        </section>
+
+				<section>
+          <h3>Now</h3>
+          <ul align='left'>
+            <li>Most of the behaviour has been modeled.</li>
+            <li>Write tests for this new behaviour.</li>
+            <li>Progagate this new behaviour in the views.</li>
+            <li>Adjust new business logic arising.</li>
+          </ul>
+        </section>
+
+				<section>
+          <h3>New viewable? method</h3>
+          <pre><code>def viewable?(current_user, school_survey)
+  case form_type
+  when 'Self-Study'
+    current_user.from_school? || school_survey.on_or_after_ssc_vcrp?
+  when 'Visiting Committee'
+    vcr_viewable?(current_user, school_survey)
+  when 'Future Planning Document'
+    fpd_viewable?(current_user, school_survey)
+  when 'Supplemental'
+    sr_viewable?(current_user, school_survey)
+  when 'Progress Report'
+    pr_viewable?(current_user, school_survey)
+  when 'Interim'
+    ir_viewable?(current_user, school_survey)
+  when 'Status-Defining'
+    sdr_viewable?(current_user, school_survey)
+  else
+    false
+  end
+end
+          </code></pre>
+        </section>
+
+				<section>
+          <h3>New viewable? method</h3>
+          <pre><code>
+# app/model/form.rb
+...
+def vcr_viewable?(current_user, school_survey)
+  (current_user.from_vcr? &&
+    school_survey.on_or_after_ssc_vcrp?) ||
+  (current_user.super_admin? &&
+    school_survey.on_or_after_ssc_vcrc?) ||
+  (current_user.head_of_school? &&
+    school_survey.on_or_after_vcr_hos?)
+end
+          </code></pre>
+          <pre><code>
+# app/model/school_survey.rb
+...
+def on_or_after_vcr_hos?
+  !(ssp? || ssc_vcrp? || ssc_vcrc?)
+end
+          </code></pre>
+        </section>
+
+				<section>
+          <h3>Calling a transition on<br>school survey</h3>
+          <pre><code>@school_survey = SchoolSurvey.find_by(id: params[:id])
+if current_user.school_admin?
+  case params['school_survey']['status']
+  when 'Self-Study Completed, VCR in Progress'
+    ssr_submitted if @school_survey.submit_ssr
+  when 'Supplemental Report Completed'
+    src_submitted if @school_survey.submit_sr
+  when 'FPD Completed'
+    fpd_submitted if @school_survey.submit_fpd
+  when 'Progress Report Completed'
+    pr_submitted if @school_survey.submit_pr
+  end
+end
+          </code></pre>
+        </section>
+
+        <section>
+          <h3>Next</h3>
+          <ul align='left'>
+            <li>Models are too fat.</li>
+            <li>Test, test and more tests are needed.</li>
+            <li>There is always more refactoring.</li>
+            <li>This approach allows for expansion:<br> more forms? more states?
+              more flows? </li>
+          </ul>
+        </section>
+
+        <section>
+           <p>
+              <a href="https://ca.linkedin.com/in/blancalmancilla/"
+                target="_blank">
+                Blanca Mancilla
+                <i class="fa fa-linkedin"></i>
+              </a> /
+              <a href="https://github.com/bluciam" target="_blank">bluciam
+                <i class="fa fa-github"></i>
+              </a> /
+              <a href="http://twitter.com/Blanckus" target="_blank"> @Blanckus
+                <i class="fa fa-twitter"></i>
+              </a>
+            </p>
+        </section>
+			</div>
+		</div>
+		<script src="reveal.js/js/reveal.js"></script>
+		<script>
+			Reveal.initialize();
+		</script>
+	</body>
+</html>
